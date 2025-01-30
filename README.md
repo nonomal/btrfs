@@ -28,15 +28,6 @@ come up with anything nifty.
 See at the end of this document for copyright details of third-party code that's
 included here.
 
-Donations
----------
-
-I've been developing this driver for fun, and in the hopes that someone out there
-will find it useful. But if you want to provide some pecuniary encouragement, it'd
-be very much appreciated:
-
-* [Paypal](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=3XQVCQ6YB55L2&lc=GB&item_name=WinBtrfs%20donation&currency_code=GBP&bn=PP%2dDonationsBF%3abtn_donate_LG%2egif%3aNonHosted)
-
 Features
 --------
 
@@ -98,8 +89,11 @@ To install the driver, [download and extract the latest release](https://github.
 right-click btrfs.inf, and choose Install. The driver is signed, so should work out
 of the box on modern versions of Windows.
 
-If you using Windows 10 and have Secure Boot enabled, you may have to make a Registry
-change in order for the driver to be loaded - see [below](#secureboot).
+If you using Windows 10 or 11 and have Secure Boot enabled, you may have to make a Registry
+change in order for the driver to be loaded - see [below](#secureboot). It's easier though
+just to turn off Secure Boot in your BIOS, unless you have a particular need for it. Bear in
+mind that Windows 11 soft-requires Secure Boot to be installed, but will work fine afterwords
+with it turned off.
 
 WinBtrfs is also available on the following package managers:
 
@@ -159,6 +153,9 @@ Similarly, the group mappings are stored in under GroupMappings. The default
 entry maps Windows' Users group to gid 100, which is usually "users" on Linux.
 You can also specify user SIDs here to force files created by a user to belong
 to a certain group. The setgid flag also works as on Linux.
+
+Note that processes running under User Access Control tokens create files as
+the BUILTIN\Administrators SID (S-1-5-32-544), rather as a user account.
 
 LXSS ("Ubuntu on Windows" / "Windows Subsystem for Linux")
 ----------------------------------------------------------
@@ -228,7 +225,7 @@ looking into converting your files.
 
 * <a name="secureboot"></a>How do I get this working with Secure Boot turned on?
 
-For the very latest versions of Windows 10, Microsoft introduced more onerous
+For the later versions of Windows 10, Microsoft introduced more onerous
 requirements for signing, which seemingly aren't available for open-source drivers.
 
 To work around this, go to `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\CI\Policy` in Regedit,
@@ -289,6 +286,12 @@ uninstall Paragon, then re-enable automount by running `diskpart` and typing
 On very old versions of Windows (XP, Server 2003?), Windows ignores Linux partitions
 entirely. If this is the case for you, try running `fdisk` on Linux and changing your
 partition type from 83 to 7.
+
+* I can edit files on Windows that I shouldn't be able to
+
+There's no mapping between Windows and POSIX permission models, they're too
+different for this to be practical. If this bothers you, you can create a
+Windows ACL on files that you don't want to be able to edit.
 
 Changelog
 ---------

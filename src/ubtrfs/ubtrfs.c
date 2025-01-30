@@ -34,7 +34,7 @@
 #include "../btrfs.h"
 #include "../btrfsioctl.h"
 #include "../crc32c.h"
-#include "../xxhash.h"
+#include "../zstd/lib/common/xxhash.h"
 
 #if defined(_X86_) || defined(_AMD64_)
 #ifndef _MSC_VER
@@ -384,7 +384,7 @@ static btrfs_chunk* add_chunk(LIST_ENTRY* chunks, uint64_t flags, btrfs_root* ch
             size = 0x40000000; // 1 GB
         else
             size = 0x10000000; // 256 MB
-    } else if (flags & BLOCK_FLAG_SYSTEM)
+    } else // BLOCK_FLAG_SYSTEM
         size = 0x800000;
 
     size = min(size, dev->dev_item.num_bytes / 10); // cap at 10%

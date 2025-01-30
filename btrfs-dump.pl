@@ -29,17 +29,17 @@ for (my $i = 1; $i <= $#ARGV; $i++) {
 
     seek($file,0x10000,0);
     read($file,$sb,0x1000);
-    my @b=unpack("Vx28A16QQA8QQQQQQQQQVVVVVQQQQvCCCA98A256QQx240a2048a672",$sb);
+    my @b=unpack("Vx28a16QQA8QQQQQQQQQVVVVVQQQQvCCCa98a256QQx240a2048a672",$sb);
 
     if ($b[4] ne "_BHRfS_M") {
         die $ARGV[$i].": not Btrfs";
     }
 
-    my @di = unpack("QQQVVVQQQVCCA16A16",$b[27]);
+    my @di = unpack("QQQVVVQQQVCCa16a16",$b[27]);
     $devs{$di[0]}=$file;
 }
 
-my ($f,$chunktree,$roottree,$logtree,$nodesize);
+my ($f,$chunktree,$roottree,$logtree,$nodesize,$blocksize);
 
 open($f,$ARGV[0]) || die "Error opening ".$ARGV[0].": $!";
 binmode($f);
@@ -213,8 +213,8 @@ sub read_superblock {
 	seek($f,0x10000,0);
 	read($f,$sb,0x1000);
 	($roottree, $chunktree, $logtree)=unpack("x80QQQ",$sb);
-	@b = unpack("A32A16QQA8QQQQQQQQQVVVVVQQQQvCCCA98A256QQA16x224a2048a672",$sb);
-    @di = unpack("QQQVVVQQQVCCA16A16",$b[27]);
+	@b = unpack("a32a16QQa8QQQQQQQQQVVVVVQQQQvCCCa98A256QQa16x224a2048a672",$sb);
+    @di = unpack("QQQVVVQQQVCCa16a16",$b[27]);
 
 	$csum_type = $b[23];
 
@@ -230,6 +230,7 @@ sub read_superblock {
 
 	my $devid=format_uuid($di[12]);
 
+	$blocksize = $b[14];
 	$nodesize = $b[15];
 
 	$devs{$di[0]}=$f;
@@ -242,7 +243,7 @@ sub read_superblock {
 		printf("bootstrap %x,%x,%x\n", @b2[0], @b2[1], @b2[2]);
 		$bootstrap=substr($bootstrap,0x11);
 
-		my @c=unpack("QQQQVVVvvQQA16",$bootstrap);
+		my @c=unpack("QQQQVVVvvQQa16",$bootstrap);
 		dump_item(0xe4, substr($bootstrap,0,0x30+($c[7]*0x20)), "", 0);
 
 		$bootstrap=substr($bootstrap,0x30+($c[7]*0x20));
@@ -483,11 +484,112 @@ sub qgroup_status_flags {
 		$f &= ~4;
 	}
 
+	if ($f & 8) {
+		push @l, "simple";
+		$f &= ~8;
+	}
+
 	if ($f != 0) {
 		push @l, $f;
 	}
 
 	return join(',',@l);
+}
+
+sub free_space_bitmap {
+	my ($s, $off) = @_;
+
+	my $b = "";
+	while (length($s) != 0) {
+		$b .= reverse(sprintf("%08b", ord($s)));
+		$s = substr($s, 1, length($s) - 1);
+	}
+
+	my @runs = ();
+
+	my $run_start = 0;
+	for (my $i = 0; $i < length($b); $i++) {
+		my $c = substr($b, $i, 1);
+
+		if ($c eq "1" && ($i == 0 || substr($b, $i - 1, 1) eq "0")) {
+			$run_start = $i;
+		} elsif ($c eq "0" && $i != 0 && substr($b, $i - 1, 1) eq "1") {
+			push @runs, sprintf("%x, %x", $off + ($run_start * $blocksize), ($i - $run_start) * $blocksize);
+		}
+	}
+
+	if (substr($b, length($b) - 1, 1) eq "1") {
+		push @runs, sprintf("%x, %x", $off + ($run_start * $blocksize),
+							(length($b) - $run_start) * $blocksize);
+	}
+
+	return join('; ', @runs);
+}
+
+sub block_group_item_flags {
+	my ($f) = @_;
+	my (@l);
+
+	if ($f & 1) {
+		push @l, "data";
+		$f &= ~1;
+	}
+
+	if ($f & 2) {
+		push @l, "system";
+		$f &= ~2;
+	}
+
+	if ($f & 4) {
+		push @l, "metadata";
+		$f &= ~4;
+	}
+
+	if ($f & 8) {
+		push @l, "raid0";
+		$f &= ~8;
+	}
+
+	if ($f & 16) {
+		push @l, "raid1";
+		$f &= ~16;
+	}
+
+	if ($f & 32) {
+		push @l, "dup";
+		$f &= ~32;
+	}
+
+	if ($f & 64) {
+		push @l, "raid10";
+		$f &= ~64;
+	}
+
+	if ($f & 128) {
+		push @l, "raid5";
+		$f &= ~128;
+	}
+
+	if ($f & 256) {
+		push @l, "raid6";
+		$f &= ~256;
+	}
+
+	if ($f & 512) {
+		push @l, "raid1c3";
+		$f &= ~512;
+	}
+
+	if ($f & 1024) {
+		push @l, "raid1c4";
+		$f &= ~1024;
+	}
+
+	if ($f != 0) {
+		push @l, $f;
+	}
+
+	return join(',', @l);
 }
 
 sub dump_item {
@@ -519,7 +621,7 @@ sub dump_item {
 			#print Dumper(@b)."\n";
 			printf("; expgen=%x objid=%x blocknum=%x bytelimit=%x bytesused=%x snapshotgen=%x flags=%x numrefs=%x dropprogress=%x,%x,%x droplevel=%x rootlevel=%x", @b);
 
-			@b=unpack("QA16A16A16QQQQQVQVQVQV",$s);
+			@b=unpack("Qa16a16a16QQQQQVQVQVQV",$s);
 			$s=substr($s,0xc8); # above + 64 blank bytes
 
 			printf(" gen2=%x uuid=%s par_uuid=%s rec_uuid=%s ctransid=%x otransid=%x stransid=%x rtransid=%x ctime=%s otime=%s stime=%s rtime=%s", $b[0], format_uuid($b[1]), format_uuid($b[2]), format_uuid($b[3]), $b[4], $b[5], $b[6], $b[7], format_time($b[8],$b[9]), format_time($b[10],$b[11]), format_time($b[12],$b[13]), format_time($b[14],$b[15]));
@@ -584,6 +686,11 @@ sub dump_item {
 		}
 	} elsif ($type == 0x30) { # ORPHAN_ITEM
 		printf("orphan_item");
+	} elsif ($type == 0x48) { # LOG_INDEX
+		@b=unpack("Q",$s);
+		$s=substr($s,8);
+
+		printf("log_index end=%x", $b[0]);
 	} elsif ($type == 0x6c) { # EXTENT_DATA
 		@b=unpack("QQCCvC",$s);
 		$s=substr($s,0x15);
@@ -648,7 +755,11 @@ sub dump_item {
 				my $irt=unpack("C",$s);
 				$s = substr($s,1);
 
-				if ($irt == 0xb0) {
+				if ($irt == 0xac) {
+					@b=unpack("Q",$s);
+					$s=substr($s,8);
+					printf("extent_owner_ref root=%x ",$b[0]);
+				} elsif ($irt == 0xb0) {
 					@b=unpack("Q",$s);
 					$s=substr($s,8);
 					printf("tree_block_ref root=%x ",$b[0]);
@@ -692,21 +803,22 @@ sub dump_item {
 	} elsif ($type == 0xc0) { # BLOCK_GROUP_ITEM
 		@b=unpack("QQQ",$s);
 		$s=substr($s,0x18);
-		printf("block_group_item size=%x chunktreeid=%x flags=%x",$b[0],$b[1],$b[2]);
-        } elsif ($type == 0xc6) { # FREE_SPACE_INFO
+		printf("block_group_item size=%x chunktreeid=%x flags=%s", $b[0], $b[1], block_group_item_flags($b[2]));
+	} elsif ($type == 0xc6) { # FREE_SPACE_INFO
 		@b=unpack("VV",$s);
 		$s=substr($s,0x8);
 		printf("free_space_info count=%x flags=%x",$b[0],$b[1]);
 	} elsif ($type == 0xc7) { # FREE_SPACE_EXTENT
 		printf("free_space_extent");
 	} elsif ($type == 0xc8) { # FREE_SPACE_BITMAP
-		printf("free_space_bitmap"); # FIXME - print contents
+		printf("free_space_bitmap %s", free_space_bitmap($s, $id));
+		$s = "";
 	} elsif ($type == 0xcc) { # DEV_EXTENT
-		@b=unpack("QQQQA16",$s);
+		@b=unpack("QQQQa16",$s);
 		$s=substr($s,0x30);
 		printf("dev_extent chunktree=%x, chunkobjid=%x, logaddr=%x, size=%x, chunktreeuuid=%s", $b[0], $b[1], $b[2], $b[3], format_uuid($b[4]));
 	} elsif ($type == 0xd8) { # DEV_ITEM
-		@b=unpack("QQQVVVQQQVCCA16A16",$s);
+		@b=unpack("QQQVVVQQQVCCa16a16",$s);
 		printf("dev_item id=%x numbytes=%x bytesused=%x ioalign=%x iowidth=%x sectorsize=%x type=%x gen=%x startoff=%x devgroup=%x seekspeed=%x bandwidth=%x devid=%s fsid=%s", $b[0], $b[1], $b[2], $b[3], $b[4], $b[5], $b[6], $b[7], $b[8], $b[9], $b[10], $b[11], format_uuid($b[12]), format_uuid($b[13]));
 		$s=substr($s,0x62);
 	} elsif ($type == 0xe4) { # CHUNK_ITEM
@@ -716,15 +828,15 @@ sub dump_item {
 
 		my $numstripes=$b[7];
 		for (my $i=0;$i<$numstripes;$i++) {
-			@b=unpack("QQA16",$s);
+			@b=unpack("QQa16",$s);
 			$s=substr($s,0x20);
 
 			printf(" stripe(%u) devid=%x offset=%x devuuid=%s",$i,$b[0],$b[1],format_uuid($b[2]));
 		}
 	} elsif ($type == 0xf0) { # QGROUP_STATUS
-		@b=unpack("QQQQ", $s);
-		printf("qgroup_status version=%x generation=%x flags=%s rescan=%x",$b[0],$b[1],qgroup_status_flags($b[2]),$b[3]);
-		$s=substr($s,0x20);
+		@b=unpack("QQQQQ", $s);
+		printf("qgroup_status version=%x generation=%x flags=%s rescan=%x enable_gen=%x",$b[0],$b[1],qgroup_status_flags($b[2]),$b[3],$b[4]);
+		$s=substr($s,0x28);
 	} elsif ($type == 0xf2) { # QGROUP_INFO
 		@b=unpack("QQQQQ", $s);
 		printf("qgroup_info generation=%x rfer=%x rfer_cmpr=%x excl=%x excl_cmpr=%x",$b[0],$b[1],$b[2],$b[3],$b[4]);
@@ -733,6 +845,8 @@ sub dump_item {
 		@b=unpack("QQQQQ", $s);
 		printf("qgroup_limit flags=%x max_rfer=%x max_excl=%x rsv_rfer=%x rsv_excl=%x",$b[0],$b[1],$b[2],$b[3],$b[4]);
 		$s=substr($s,0x28);
+	} elsif ($type == 0xf6) { # QGROUP_RELATION
+		printf("qgroup_relation");
 	} elsif ($type == 0xf8 && $id == 0xfffffffffffffffc) { # balance
 		my ($fl,@f);
 
@@ -890,13 +1004,43 @@ sub read_data {
 	}
 }
 
+sub header_flags {
+	my ($flags)=@_;
+	my @l=();
+
+	if ($flags & 1) {
+		push @l,"written";
+		$flags &= ~1;
+	}
+
+	if ($flags & 2) {
+		push @l,"reloc";
+		$flags &= ~2;
+	}
+
+	if ($flags & 0x100000000000000) {
+		push @l,"mixed_backref";
+		$flags &= ~0x100000000000000;
+	}
+
+	if ($flags != 0) {
+		push @l,sprintf("%x",$flags);
+	}
+
+	if ($#l > -1) {
+		return join(',',@l);
+	} else {
+		return 0;
+	}
+}
+
 sub dump_tree {
 	my ($addr, $pref, $bs)=@_;
 	my ($head, @headbits, $level, $treenum, $tree, $csum);
 
 	$tree = read_data($addr, $nodesize, $bs);
 
-	@headbits=unpack("A32A16QQA16QQVC",$tree);
+	@headbits=unpack("a32a16QQa16QQVC",$tree);
 	if ($headbits[2] != $addr) {
 		printf STDERR sprintf("Address mismatch: expected %llx, got %llx\n", $addr, $headbits[2]);
 		exit;
@@ -911,7 +1055,7 @@ sub dump_tree {
 	}
 
 	print $pref;
-	printf("header csum=%s fsid=%s addr=%x flags=%x chunk=%s gen=%x tree=%x numitems=%x level=%x\n", $csum, format_uuid($headbits[1]), $headbits[2], $headbits[3], format_uuid($headbits[4]), $headbits[5], $headbits[6], $headbits[7], $headbits[8]);
+	printf("header csum=%s fsid=%s addr=%x flags=%s chunk=%s gen=%x tree=%x numitems=%x level=%x\n", $csum, format_uuid($headbits[1]), $headbits[2], header_flags($headbits[3]), format_uuid($headbits[4]), $headbits[5], $headbits[6], $headbits[7], $headbits[8]);
 
 	$level=$headbits[8];
 	$treenum=$headbits[6];
@@ -940,7 +1084,7 @@ sub dump_tree {
 
 				my $numstripes=$b[7];
 
-				my @cis=unpack("QQA16",$stripes);
+				my @cis=unpack("QQa16",$stripes);
 				$stripes=substr($stripes,32);
 
 				$obj{'physoffset'}=$cis[1];
@@ -951,7 +1095,7 @@ sub dump_tree {
 				$obj{'devid'}=$cis[0];
 
 				if ($b[7] > 1) {
-					my @cis=unpack("QQA16",$stripes);
+					my @cis=unpack("QQa16",$stripes);
 					$stripes=substr($stripes,32);
 
 					$obj{'physoffset2'}=$cis[1];
@@ -959,7 +1103,7 @@ sub dump_tree {
 				}
 
 				if ($b[7] > 2) {
-					my @cis=unpack("QQA16",$stripes);
+					my @cis=unpack("QQa16",$stripes);
 					$stripes=substr($stripes,32);
 
 					$obj{'physoffset3'}=$cis[1];
@@ -967,7 +1111,7 @@ sub dump_tree {
 				}
 
 				if ($b[7] > 3) {
-					my @cis=unpack("QQA16",$stripes);
+					my @cis=unpack("QQa16",$stripes);
 					$stripes=substr($stripes,32);
 
 					$obj{'physoffset4'}=$cis[1];
