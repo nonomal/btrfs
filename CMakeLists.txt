@@ -4,28 +4,57 @@ project(btrfs VERSION 1.9.0)
 
 option(WITH_TEST "Compile test program" ON)
 
-# btrfs.sys
+if(MSVC) # cmake bug 15170
+    if(MSVC_C_ARCHITECTURE_ID STREQUAL "X86")
+        set(CMAKE_SYSTEM_PROCESSOR "x86")
+    elseif(MSVC_C_ARCHITECTURE_ID STREQUAL "x64")
+        set(CMAKE_SYSTEM_PROCESSOR "x86_64")
+    elseif(MSVC_C_ARCHITECTURE_ID STREQUAL "ARMV7")
+        set(CMAKE_SYSTEM_PROCESSOR "arm")
+    elseif(MSVC_C_ARCHITECTURE_ID STREQUAL "ARM64")
+        set(CMAKE_SYSTEM_PROCESSOR "aarch64")
+    endif()
+endif()
 
-set(ZSTD_SRC_FILES src/zstd/entropy_common.c
-    src/zstd/error_private.c
-    src/zstd/fse_compress.c
-    src/zstd/fse_decompress.c
-    src/zstd/hist.c
-    src/zstd/huf_compress.c
-    src/zstd/huf_decompress.c
-    src/zstd/zstd_common.c
-    src/zstd/zstd_compress.c
-    src/zstd/zstd_compress_literals.c
-    src/zstd/zstd_compress_sequences.c
-    src/zstd/zstd_compress_superblock.c
-    src/zstd/zstd_ddict.c
-    src/zstd/zstd_decompress.c
-    src/zstd/zstd_decompress_block.c
-    src/zstd/zstd_double_fast.c
-    src/zstd/zstd_fast.c
-    src/zstd/zstd_lazy.c
-    src/zstd/zstd_ldm.c
-    src/zstd/zstd_opt.c)
+# zstd
+
+set(ZSTD_SRC_FILES src/zstd/lib/common/entropy_common.c
+    src/zstd/lib/common/error_private.c
+    src/zstd/lib/compress/fse_compress.c
+    src/zstd/lib/common/fse_decompress.c
+    src/zstd/lib/compress/hist.c
+    src/zstd/lib/compress/huf_compress.c
+    src/zstd/lib/decompress/huf_decompress.c
+    src/zstd/lib/common/zstd_common.c
+    src/zstd/lib/compress/zstd_compress.c
+    src/zstd/lib/compress/zstd_compress_literals.c
+    src/zstd/lib/compress/zstd_compress_sequences.c
+    src/zstd/lib/compress/zstd_compress_superblock.c
+    src/zstd/lib/decompress/zstd_ddict.c
+    src/zstd/lib/decompress/zstd_decompress.c
+    src/zstd/lib/decompress/zstd_decompress_block.c
+    src/zstd/lib/compress/zstd_double_fast.c
+    src/zstd/lib/compress/zstd_fast.c
+    src/zstd/lib/compress/zstd_lazy.c
+    src/zstd/lib/compress/zstd_ldm.c
+    src/zstd/lib/compress/zstd_opt.c
+    src/zstd/lib/common/xxhash.c)
+
+add_library(zstd STATIC ${ZSTD_SRC_FILES})
+target_compile_definitions(zstd PRIVATE -DZSTD_DEPS_MALLOC -DXXH_NO_STDLIB)
+
+if(NOT MSVC)
+    target_compile_options(zstd PRIVATE -ffunction-sections -include ${CMAKE_SOURCE_DIR}/src/zstd-shim.h)
+else()
+    target_compile_options(zstd PRIVATE /Gy /FI ${CMAKE_SOURCE_DIR}/src/zstd-shim.h)
+    set_property(TARGET zstd PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
+if(MSVC AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86")
+    target_compile_options(zstd PUBLIC /Gz) # stdcall
+endif()
+
+# zlib
 
 set(ZLIB_SRC_FILES src/zlib/adler32.c
     src/zlib/deflate.c
@@ -34,6 +63,21 @@ set(ZLIB_SRC_FILES src/zlib/adler32.c
     src/zlib/inftrees.c
     src/zlib/trees.c
     src/zlib/zutil.c)
+
+add_library(zlib STATIC ${ZLIB_SRC_FILES})
+target_compile_definitions(zlib PRIVATE -DNO_GZIP -DZ_SOLO)
+
+if(NOT MSVC)
+    target_compile_options(zlib PRIVATE -ffunction-sections)
+else()
+    target_compile_options(zlib PRIVATE /Gy)
+endif()
+
+if(MSVC AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86")
+    target_compile_options(zlib PUBLIC /Gz) # stdcall
+endif()
+
+# btrfs.sys
 
 set(SRC_FILES src/balance.c
     src/blake2b-ref.c
@@ -67,22 +111,7 @@ set(SRC_FILES src/balance.c
     src/volume.c
     src/worker-thread.c
     src/write.c
-    src/xxhash.c
-    ${CMAKE_CURRENT_BINARY_DIR}/btrfs.rc
-    ${ZSTD_SRC_FILES}
-    ${ZLIB_SRC_FILES})
-
-if(MSVC) # cmake bug 15170
-    if(MSVC_C_ARCHITECTURE_ID STREQUAL "X86")
-        set(CMAKE_SYSTEM_PROCESSOR "x86")
-    elseif(MSVC_C_ARCHITECTURE_ID STREQUAL "x64")
-        set(CMAKE_SYSTEM_PROCESSOR "x86_64")
-    elseif(MSVC_C_ARCHITECTURE_ID STREQUAL "ARMV7")
-        set(CMAKE_SYSTEM_PROCESSOR "arm")
-    elseif(MSVC_C_ARCHITECTURE_ID STREQUAL "ARM64")
-        set(CMAKE_SYSTEM_PROCESSOR "aarch64")
-    endif()
-endif()
+    ${CMAKE_CURRENT_BINARY_DIR}/btrfs.rc)
 
 # Work around bug in MSVC version of cmake - see https://gitlab.kitware.com/cmake/cmake/-/merge_requests/4257
 set(CMAKE_ASM_MASM_COMPILE_OPTIONS_MSVC_RUNTIME_LIBRARY_MultiThreaded         "")
@@ -137,6 +166,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND WIN32)
 endif()
 
 add_library(btrfs SHARED ${SRC_FILES})
+target_link_libraries(btrfs zstd zlib)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_definitions(-D_DEBUG)
@@ -206,6 +236,7 @@ set(SHELLEXT_SRC_FILES src/shellext/balance.cpp
     src/shellext/factory.cpp
     src/shellext/iconoverlay.cpp
     src/shellext/main.cpp
+    src/shellext/mappings.cpp
     src/shellext/mountmgr.cpp
     src/shellext/propsheet.cpp
     src/shellext/recv.cpp
@@ -226,7 +257,7 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "
     endif()
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
@@ -262,7 +293,6 @@ endif()
 
 set(UBTRFS_SRC_FILES src/ubtrfs/ubtrfs.c
     src/crc32c.c
-    src/xxhash.c
     src/sha256.c
     src/blake2b-ref.c
     src/ubtrfs/ubtrfs.def
@@ -288,6 +318,7 @@ endif()
 
 target_compile_definitions(ubtrfs PUBLIC _USRDLL)
 target_link_libraries(ubtrfs ntdll advapi32)
+target_link_libraries(ubtrfs zstd)
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(ubtrfs PUBLIC -Wno-pragma-pack) # ignore warning in mingw headers
